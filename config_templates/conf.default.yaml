@@ -25,6 +25,11 @@ system_config:
     # Additional guidance for LLM on how to use tools
     # tool_guidance_prompt: 'tool_guidance_prompt' 
 
+  # MaiBot bridge: forward user input to MaiBot message_process (no history), use MaiBot reply for TTS/display
+  maibot_enabled: true
+  maibot_host: 'localhost'
+  maibot_port: 18000
+
 # configuration for the default character
 character_config:
   conf_name: 'mao_pro' # The name of character configuration file.

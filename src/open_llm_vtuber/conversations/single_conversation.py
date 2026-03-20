@@ -17,9 +17,96 @@ from .types import WebSocketSend
 from .tts_manager import TTSTaskManager
 from ..chat_history_manager import store_message
 from ..service_context import ServiceContext
+from ..maibot_bridge import get_maibot_bridge
+
 
 # Import necessary types from agent outputs
-from ..agent.output_types import SentenceOutput, AudioOutput
+from ..agent.output_types import SentenceOutput, AudioOutput, DisplayText, Actions
+
+
+async def process_single_conversation_via_maibot(
+    context: ServiceContext,
+    websocket_send: WebSocketSend,
+    client_uid: str,
+    user_input: Union[str, np.ndarray],
+    images: Optional[List[Dict[str, Any]]] = None,
+    session_emoji: str = np.random.choice(EMOJI_LIST),
+) -> str:
+    """
+    通过 MaiBot 处理单轮对话：用户输入不携带历史发给 MaiBot message_process，
+    等待 MaiBot 回复后走本地 TTS/展示。详见开发记录/VTuber与MaiBot双向接入_格式与实现.md
+    """
+    tts_manager = TTSTaskManager()
+    try:
+        await send_conversation_start_signals(websocket_send)
+        logger.info(f"[MaiBot] 对话链 {session_emoji} 已开始")
+
+        input_text = await process_user_input(
+            user_input, context.asr_engine, websocket_send
+        )
+        logger.info(f"[MaiBot] 用户输入: {input_text}")
+
+        bridge = get_maibot_bridge()
+        if not bridge:
+            await websocket_send(
+                json.dumps({"type": "error", "message": "MaiBot 桥接未就绪"})
+            )
+            return ""
+
+        ok = await bridge.send_user_message(client_uid, input_text, images=images)
+        if not ok:
+            await websocket_send(
+                json.dumps({"type": "error", "message": "向 MaiBot 发送失败"})
+            )
+            return ""
+
+        reply_text = await bridge.wait_reply(client_uid, timeout=120.0)
+        bridge.release_client(client_uid)
+        if not reply_text:
+            await websocket_send(
+                json.dumps({"type": "error", "message": "未收到 MaiBot 回复或超时"})
+            )
+            return ""
+
+        # 将 MaiBot 回复当作单条 SentenceOutput 走现有 TTS/展示
+        output = SentenceOutput(
+            display_text=DisplayText(text=reply_text),
+            tts_text=reply_text,
+            actions=Actions(),
+        )
+        full_response = await process_agent_output(
+            output,
+            context.character_config,
+            context.live2d_model,
+            context.tts_engine,
+            websocket_send,
+            tts_manager,
+            context.translate_engine,
+        )
+
+        if tts_manager.task_list:
+            await asyncio.gather(*tts_manager.task_list)
+            await websocket_send(json.dumps({"type": "backend-synth-complete"}))
+
+        await finalize_conversation_turn(
+            tts_manager=tts_manager,
+            websocket_send=websocket_send,
+            client_uid=client_uid,
+        )
+        logger.info(f"[MaiBot] AI 响应: {full_response}")
+        return full_response
+    except asyncio.CancelledError:
+        logger.info(f"[MaiBot] 对话 {session_emoji} 已取消")
+        raise
+    except Exception as e:
+        logger.error(f"[MaiBot] 对话错误: {e}")
+        await websocket_send(
+            json.dumps({"type": "error", "message": f"对话错误: {str(e)}"})
+        )
+        raise
+    finally:
+        cleanup_conversation(tts_manager, session_emoji)
+
 
 
 async def process_single_conversation(

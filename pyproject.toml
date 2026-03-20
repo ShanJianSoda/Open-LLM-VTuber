@@ -38,6 +38,7 @@ dependencies = [
     "tqdm>=4.67.1",
     "uvicorn[standard]>=0.33.0",
     "websocket-client>=1.8.0",
+    "websockets>=14.0",
     "letta-client>=0.1.100",
     "duckduckgo-mcp-server>=0.1.1",
 ]

@@ -8,6 +8,7 @@ It uses FastAPI for the server and Starlette for static file serving.
 
 import os
 import shutil
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from starlette.middleware.cors import CORSMiddleware
@@ -17,6 +18,7 @@ from starlette.staticfiles import StaticFiles as StarletteStaticFiles
 from .routes import init_client_ws_route, init_webtool_routes, init_proxy_route
 from .service_context import ServiceContext
 from .config_manager.utils import Config
+from .maibot_bridge import MaiBotBridge, set_maibot_bridge, get_maibot_bridge
 
 
 # Create a custom StaticFiles class that adds CORS headers
@@ -53,6 +55,25 @@ class AvatarStaticFiles(CORSStaticFiles):
         return response
 
 
+def _make_lifespan(config: Config):
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        if getattr(config.system_config, "maibot_enabled", False):
+            bridge = MaiBotBridge(
+                host=config.system_config.maibot_host,
+                port=config.system_config.maibot_port,
+            )
+            if await bridge.start():
+                set_maibot_bridge(bridge)
+        yield
+        bridge = get_maibot_bridge()
+        if bridge:
+            await bridge.stop()
+            set_maibot_bridge(None)
+
+    return lifespan
+
+
 class WebSocketServer:
     """
     API server for Open-LLM-VTuber. This contains the websocket endpoint for the client, hosts the web tool, and serves static files.
@@ -72,8 +93,8 @@ class WebSocketServer:
     """
 
     def __init__(self, config: Config, default_context_cache: ServiceContext = None):
-        self.app = FastAPI(title="Open-LLM-VTuber Server")  # Added title for clarity
         self.config = config
+        self.app = FastAPI(lifespan=_make_lifespan(config))
         self.default_context_cache = (
             default_context_cache or ServiceContext()
         )  # Use provided context or initialize a new empty one waiting to be loaded

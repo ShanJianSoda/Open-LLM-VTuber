@@ -10,7 +10,7 @@ from ..chat_group import ChatGroupManager
 from ..chat_history_manager import store_message
 from ..service_context import ServiceContext
 from .group_conversation import process_group_conversation
-from .single_conversation import process_single_conversation
+from .single_conversation import process_single_conversation, process_single_conversation_via_maibot
 from .conversation_utils import EMOJI_LIST
 from .types import GroupConversationState
 from prompts import prompt_loader
@@ -96,17 +96,29 @@ async def handle_conversation_trigger(
             )
     else:
         # Use client_uid as task key for individual conversations
-        current_conversation_tasks[client_uid] = asyncio.create_task(
-            process_single_conversation(
-                context=context,
-                websocket_send=websocket.send_text,
-                client_uid=client_uid,
-                user_input=user_input,
-                images=images,
-                session_emoji=session_emoji,
-                metadata=metadata,
+        # 若启用 MaiBot 桥接，则仅把当前输入发给 MaiBot（不携带历史），回复走 MaiBot
+        if getattr(context.system_config, "maibot_enabled", False):
+            current_conversation_tasks[client_uid] = asyncio.create_task(
+                process_single_conversation_via_maibot(
+                    context=context,
+                    websocket_send=websocket.send_text,
+                    client_uid=client_uid,
+                    user_input=user_input,
+                    images=images,
+                    session_emoji=session_emoji,
+                )
             )
-        )
+        else:
+            current_conversation_tasks[client_uid] = asyncio.create_task(
+                process_single_conversation(
+                    context=context,
+                    websocket_send=websocket.send_text,
+                    client_uid=client_uid,
+                    user_input=user_input,
+                    images=images,
+                    session_emoji=session_emoji,
+                )
+            )
 
 
 async def handle_individual_interrupt(
